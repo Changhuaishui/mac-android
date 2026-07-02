@@ -39,6 +39,13 @@ final class Encoder {
             encoder.handleEncodedFrame(sampleBuffer: sampleBuffer, sourceFrameRefCon: sourceFrameRefCon)
         }
 
+        let pixelFormatType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        let imageBufferAttributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormatType,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height
+        ]
+
         var sessionRef: VTCompressionSession?
         let createStatus = VTCompressionSessionCreate(
             allocator: nil,
@@ -46,7 +53,7 @@ final class Encoder {
             height: height,
             codecType: kCMVideoCodecType_H264,
             encoderSpecification: nil,
-            imageBufferAttributes: nil,
+            imageBufferAttributes: imageBufferAttributes as CFDictionary,
             compressedDataAllocator: nil,
             outputCallback: callback,
             refcon: Unmanaged.passUnretained(self).toOpaque(),
@@ -95,7 +102,7 @@ final class Encoder {
             session,
             imageBuffer: imageBuffer,
             presentationTimeStamp: pts,
-            duration: duration,
+            duration: duration.isValid ? duration : CMTime.invalid,
             frameProperties: nil,
             sourceFrameRefcon: Unmanaged.passRetained(context).toOpaque(),
             infoFlagsOut: nil
@@ -157,7 +164,7 @@ final class Encoder {
                             (status >> 16) & 0xff,
                             (status >> 8) & 0xff,
                             status & 0xff)
-        print("[ERROR] VideoToolbox \(operation) failed: \(status) (\(fourcc))")
+        Logger.writeLine("[ERROR] VideoToolbox \(operation) failed: \(status) (\(fourcc))")
     }
 }
 
