@@ -37,6 +37,15 @@ class TcpClient(private val listener: TcpClientListener) {
     private var currentHost: String = ""
     @Volatile
     private var currentPort: Int = 0
+    @Volatile
+    private var displayCapabilities: DisplayCapabilities? = null
+
+    /**
+     * 设置连接时发送的 HELLO 中使用的设备显示能力。
+     */
+    fun setDisplayCapabilities(capabilities: DisplayCapabilities?) {
+        this.displayCapabilities = capabilities
+    }
 
     fun connect(host: String, port: Int) {
         if (running.get()) {
@@ -156,6 +165,9 @@ class TcpClient(private val listener: TcpClientListener) {
                 put("max_fps", 30)
                 put("supported_codecs", JSONArray().apply { put("h264") })
                 put("supported_h264_stream_formats", JSONArray().apply { put("annex_b") })
+                displayCapabilities?.toJson()?.let { caps ->
+                    put("display_capabilities", caps.getJSONObject("display_capabilities"))
+                }
             }.toString().toByteArray(Charsets.UTF_8)
             val header = buildHeader(Protocol.TYPE_HELLO, 0, 0, 0, payload.size)
             val out = socket.getOutputStream()

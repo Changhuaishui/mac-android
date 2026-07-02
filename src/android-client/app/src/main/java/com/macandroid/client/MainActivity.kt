@@ -13,19 +13,23 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 private const val TAG = "MacMainActivity"
 
-class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListener {
+class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListener, AssetPlayerListener {
 
     private lateinit var surfaceView: android.view.SurfaceView
     private lateinit var hostInput: EditText
     private lateinit var portInput: EditText
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
+    private lateinit var playAssetButton: Button
+    private lateinit var stopAssetButton: Button
     private lateinit var statusText: TextView
+    private lateinit var capabilityText: TextView
     private lateinit var statsText: TextView
     private lateinit var errorText: TextView
 
     private val tcpClient = TcpClient(this)
     private val videoDecoder = VideoDecoder(this)
+    private lateinit var assetPlayer: AssetPlayer
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -52,14 +56,20 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
         portInput = findViewById(R.id.portInput)
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
+        playAssetButton = findViewById(R.id.playAssetButton)
+        stopAssetButton = findViewById(R.id.stopAssetButton)
         statusText = findViewById(R.id.statusText)
+        capabilityText = findViewById(R.id.capabilityText)
         statsText = findViewById(R.id.statsText)
         errorText = findViewById(R.id.errorText)
+
+        assetPlayer = AssetPlayer(assets, videoDecoder, this)
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 Log.i(TAG, "Surface created")
                 hasSurface = true
+                readDisplayCapabilities()
                 videoConfig?.let { cfg ->
                     videoDecoder.configure(cfg.width, cfg.height, cfg.fps, holder.surface)
                 }
@@ -67,17 +77,24 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
                 Log.i(TAG, "Surface changed: ${width}x${height}")
+                readDisplayCapabilities()
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 Log.i(TAG, "Surface destroyed")
                 hasSurface = false
+                assetPlayer.stop()
                 videoDecoder.release()
             }
         })
 
         connectButton.setOnClickListener { onConnectClicked() }
         disconnectButton.setOnClickListener { onDisconnectClicked() }
+        playAssetButton.setOnClickListener { onPlayAssetClicked() }
+        stopAssetButton.setOnClickListener { onStopAssetClicked() }
+
+        // 布局完成后读取一次显示能力（Surface 尺寸可能尚未就绪时也会更新）
+        surfaceView.post { readDisplayCapabilities() }
 
         mainHandler.post(statsRunnable)
     }
@@ -85,8 +102,38 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacks(statsRunnable)
+        assetPlayer.stop()
         tcpClient.disconnect()
         videoDecoder.release()
+    }
+
+    private fun onPlayAssetClicked() {
+        hideError()
+        tcpClient.disconnect()
+        if (hasSurface) {
+            // fixture 规格：1280x800，30fps
+            videoDecoder.configure(1280, 800, 30, surfaceView.holder.surface)
+            assetPlayer.play("sample-annexb.h264", fps = 30)
+        } else {
+            showError("Surface 尚未就绪")
+        }
+    }
+
+    private fun onStopAssetClicked() {
+        assetPlayer.stop()
+        updateAssetButtons(false)
+    }
+
+    private fun updateAssetButtons(playing: Boolean) {
+        runOnUiThread {
+            if (playing) {
+                playAssetButton.visibility = View.GONE
+                stopAssetButton.visibility = View.VISIBLE
+            } else {
+                playAssetButton.visibility = View.VISIBLE
+                stopAssetButton.visibility = View.GONE
+            }
+        }
     }
 
     private fun onConnectClicked() {
@@ -106,6 +153,7 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
     }
 
     private fun onDisconnectClicked() {
+        assetPlayer.stop()
         tcpClient.disconnect()
         videoDecoder.release()
         frameCount = 0
@@ -182,6 +230,40 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
     //endregion
 
+    //region AssetPlayerListener
+
+    override fun onAssetStarted(assetName: String, totalFrameCount: Int) {
+        runOnUiThread {
+            statusText.text = "播放 fixture: $assetName ($totalFrameCount 帧)"
+            statsText.visibility = View.VISIBLE
+            updateAssetButtons(true)
+            this@MainActivity.frameCount = 0
+            lastStatsTime = System.currentTimeMillis()
+        }
+    }
+
+    override fun onAssetFrame(frameIndex: Int) {
+        frameCount++
+        lastFrameTime = System.currentTimeMillis()
+    }
+
+    override fun onAssetFinished(assetName: String, totalFrames: Int) {
+        runOnUiThread {
+            statusText.text = "fixture 播放完成: $totalFrames 帧"
+            updateAssetButtons(false)
+        }
+    }
+
+    override fun onAssetError(error: String) {
+        runOnUiThread {
+            showError(error)
+            Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+            updateAssetButtons(false)
+        }
+    }
+
+    //endregion
+
     //region VideoDecoderListener
 
     override fun onDecoderError(error: String) {
@@ -201,6 +283,14 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
     private fun sendError(text: String) {
         tcpClient.sendError(text)
+    }
+
+    private fun readDisplayCapabilities() {
+        val capabilities = DisplayCapabilitiesReader.read(this, surfaceView)
+        tcpClient.setDisplayCapabilities(capabilities)
+        runOnUiThread {
+            capabilityText.text = capabilities.summaryText()
+        }
     }
 
     private fun updateStats() {

@@ -8,6 +8,9 @@
     <string name="hint_port">端口</string>
     <string name="btn_connect">连接</string>
     <string name="btn_disconnect">断开</string>
-    <string name="default_host">10.0.0.2</string>
+    <string name="btn_play_asset">播放本地 fixture</string>
+    <string name="btn_stop_asset">停止 fixture</string>
+    <string name="default_host">127.0.0.1</string>
     <string name="default_port">19421</string>
+    <string name="capability_loading">正在读取显示能力…</string>
 </resources>

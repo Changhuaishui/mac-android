@@ -66,6 +66,31 @@
         android:textColor="#FFFFFF"
         android:visibility="gone" />
 
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/playAssetButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="472dp"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#008577"
+        android:minWidth="120dp"
+        android:text="@string/btn_play_asset"
+        android:textColor="#FFFFFF" />
+
+    <androidx.appcompat.widget.AppCompatButton
+        android:id="@+id/stopAssetButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="604dp"
+        android:layout_marginTop="12dp"
+        android:backgroundTint="#B00020"
+        android:minWidth="120dp"
+        android:text="@string/btn_stop_asset"
+        android:textColor="#FFFFFF"
+        android:visibility="gone" />
+
     <SurfaceView
         android:id="@+id/surfaceView"
         android:layout_width="match_parent"
@@ -84,6 +109,20 @@
         android:textColor="#FFFFFF"
         android:textSize="14sp"
         android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/capabilityText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="56dp"
+        android:layout_marginEnd="16dp"
+        android:background="#CC000000"
+        android:padding="8dp"
+        android:text="@string/capability_loading"
+        android:textColor="#00E676"
+        android:textSize="12sp"
+        android:visibility="visible" />
 
     <TextView
         android:id="@+id/statsText"
