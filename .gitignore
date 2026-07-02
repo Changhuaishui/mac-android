@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+
+# Local editors / IDE state
+.idea/
+.vscode/
+*.iml
+
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+
+# SwiftPM / Xcode local products
+.build/
+.swiftpm/
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+
+# Packaged app artifacts
+dist/
+*.app
+*.zip
+
+# Python / local tooling
+.venv/
+.venv-*/
+__pycache__/
+*.pyc
+
+# Secrets / signing material
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.xcarchive
+
+# Runtime logs
+*.log
