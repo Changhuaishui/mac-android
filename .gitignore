@@ -41,3 +41,17 @@ __pycache__/
 
 # Runtime logs
 *.log
+
+# Project docs (keep local, do not publish to GitHub)
+agents/
+loop/
+交付记录/
+任务记录/
+参考资料/
+模板/
+测试资产/
+规范/
+设计/
+AGENTS.md
+README.md
+当前工作台.md
