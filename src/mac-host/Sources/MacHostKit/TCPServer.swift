@@ -151,6 +151,10 @@ final class TCPServer {
         }
         guard accepted >= 0 else { return }
 
+        // 关闭 Nagle 算法，降低小包延迟。
+        var noDelay: Int32 = 1
+        setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &noDelay, socklen_t(MemoryLayout<Int32>.size))
+
         // M1 只服务一个 client，连接成功后关闭所有监听器。
         stopListening()
         clientSocket = accepted

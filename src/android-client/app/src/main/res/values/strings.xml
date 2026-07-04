@@ -13,6 +13,12 @@
     <string name="default_host">127.0.0.1</string>
     <string name="default_port">19421</string>
     <string name="capability_loading">正在读取显示能力…</string>
+    <string name="status_disconnected_short">● 未连接</string>
+    <string name="status_connecting_short">● 连接中…</string>
+    <string name="mode_mirror_short">镜像</string>
+    <string name="mode_extended_short">扩展 #%1$d</string>
+
+    <!-- 控制面板内完整信息 -->
     <string name="mode_mirror">镜像模式</string>
     <string name="mode_extended">扩展屏模式 | 显示器 #%1$d | %2$s @ %3$dfps</string>
 </resources>

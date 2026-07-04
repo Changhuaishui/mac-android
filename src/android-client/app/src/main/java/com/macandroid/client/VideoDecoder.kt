@@ -27,12 +27,17 @@ data class DecodableFrame(
     val presentationTimeUs: Long
 )
 
+private const val MAX_QUEUE_SIZE = 5
+private const val MAX_QUEUE_AGE_MS = 500
+
 /**
  * M1 Android Client 视频解码器。
  *
  * v0 协议固定使用 H.264 Annex B byte stream：每个 VIDEO_FRAME payload 自身即为完整
  * Annex B 数据，SPS/PPS 已包含在关键帧 payload 中。Android 端不依赖 VIDEO_CONFIG
  * 携带二进制配置数据，也不把配置帧额外拼接到后续帧。
+ *
+ * M3 收尾优化：队列深度降到 5，并丢弃超过 500ms 的老非关键帧，降低端到端延迟。
  */
 class VideoDecoder(private val listener: VideoDecoderListener) {
 
@@ -43,7 +48,7 @@ class VideoDecoder(private val listener: VideoDecoderListener) {
     private var configuredFps = DEFAULT_FPS
 
     private val running = AtomicBoolean(false)
-    private val queue = ArrayBlockingQueue<DecodableFrame>(60)
+    private val queue = ArrayBlockingQueue<DecodableFrame>(MAX_QUEUE_SIZE)
     private var decoderThread: Thread? = null
 
     @Synchronized
@@ -76,7 +81,30 @@ class VideoDecoder(private val listener: VideoDecoderListener) {
     }
 
     fun queueFrame(data: ByteArray, flags: Int, presentationTimeUs: Long): Boolean {
-        return queue.offer(DecodableFrame(data, flags, presentationTimeUs))
+        val nowUs = System.nanoTime() / 1000
+        val ageUs = nowUs - presentationTimeUs
+        val ageMs = ageUs / 1000
+        val isKeyframe = (flags and Protocol.FLAG_KEYFRAME) != 0
+
+        // 丢弃过老的非关键帧，降低延迟。
+        if (!isKeyframe && ageMs > MAX_QUEUE_AGE_MS) {
+            Log.d(TAG, "Drop stale frame: age=${ageMs}ms, keyframe=$isKeyframe")
+            return true
+        }
+
+        val success = queue.offer(DecodableFrame(data, flags, presentationTimeUs))
+        if (!success) {
+            Log.w(TAG, "Decoder queue full, dropped frame")
+            // 队列满时尝试丢弃最旧的一帧非关键帧，给新帧腾位置。
+            val oldest = queue.peek()
+            if (oldest != null && (oldest.flags and Protocol.FLAG_KEYFRAME) == 0) {
+                queue.poll()
+                queue.offer(DecodableFrame(data, flags, presentationTimeUs))
+                Log.w(TAG, "Dropped oldest non-keyframe to make room")
+                return true
+            }
+        }
+        return success
     }
 
     fun queueSize(): Int = queue.size

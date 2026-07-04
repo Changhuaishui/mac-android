@@ -45,14 +45,15 @@ public struct VirtualDisplayConfiguration {
         refreshRate: Double = 60.0,
         name: String = "MacAndroid Virtual Display",
         vendorID: UInt32 = 0xF0F0,
-        serialNum: UInt32 = 0x0001
+        serialNum: UInt32? = nil
     ) {
         self.width = width
         self.height = height
         self.refreshRate = refreshRate
         self.name = name
         self.vendorID = vendorID
-        self.serialNum = serialNum
+        // 使用变化的 serialNum，避免 macOS 记忆上次用户切换的分辨率。
+        self.serialNum = serialNum ?? UInt32(Date().timeIntervalSince1970)
         // 约 24 英寸 16:9 显示器的物理尺寸，避免被系统以像素密度过高拒绝。
         let mmDiagonal: Double = 531.0
         let aspect = Double(width) / Double(height)

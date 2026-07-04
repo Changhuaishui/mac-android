@@ -35,6 +35,7 @@ public final class CGVirtualDisplayBackend: VirtualDisplay {
     public func start() async throws {
         try createVirtualDisplay()
         try await waitForSystemRegistration()
+        forceTargetResolution()
         disableMirroringIfNeeded()
     }
 
@@ -144,6 +145,50 @@ public final class CGVirtualDisplayBackend: VirtualDisplay {
 
         self.virtualDisplay = display
         self.displayID = displayID
+    }
+
+    /// 启动后强制把虚拟显示器切回配置的目标分辨率，防止 macOS 沿用用户上次选择的分辨率。
+    private func forceTargetResolution() {
+        guard let displayID = displayID else { return }
+
+        let targetWidth = config.width
+        let targetHeight = config.height
+
+        var configRef: CGDisplayConfigRef?
+        let beginError = CGBeginDisplayConfiguration(&configRef)
+        guard beginError == .success, let configRef = configRef else {
+            log("无法开始显示器配置，跳过强制目标分辨率", isError: true)
+            return
+        }
+
+        var bestMode: CGDisplayMode?
+        if let modes = CGDisplayCopyAllDisplayModes(displayID, nil) as? [CGDisplayMode] {
+            bestMode = modes.first { mode in
+                mode.pixelWidth == targetWidth && mode.pixelHeight == targetHeight
+            }
+        }
+
+        if let mode = bestMode {
+            let configureError = CGConfigureDisplayWithDisplayMode(configRef, displayID, mode, nil)
+            if configureError == .success {
+                let completeError = CGCompleteDisplayConfiguration(configRef, .forSession)
+                if completeError == .success {
+                    log("已强制虚拟显示器回到目标分辨率 \(targetWidth)x\(targetHeight)")
+                    return
+                } else {
+                    log("完成目标分辨率配置失败: \(completeError.rawValue)", isError: true)
+                    CGCancelDisplayConfiguration(configRef)
+                    return
+                }
+            } else {
+                log("配置目标分辨率失败: \(configureError.rawValue)", isError: true)
+                CGCancelDisplayConfiguration(configRef)
+                return
+            }
+        }
+
+        CGCancelDisplayConfiguration(configRef)
+        log("未找到目标分辨率 \(targetWidth)x\(targetHeight) 的可用模式，保持系统当前模式", isError: true)
     }
 
     /// macOS 新显示器默认可能进入镜像模式。强制改为扩展模式，避免退化成主屏镜像。

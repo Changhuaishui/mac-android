@@ -21,16 +21,16 @@ private const val TAG = "MacMainActivity"
 class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListener, AssetPlayerListener {
 
     private lateinit var surfaceView: android.view.SurfaceView
+    private lateinit var statusPill: TextView
+    private lateinit var controlPanel: View
     private lateinit var hostInput: EditText
     private lateinit var portInput: EditText
     private lateinit var connectButton: Button
     private lateinit var disconnectButton: Button
     private lateinit var playAssetButton: Button
     private lateinit var stopAssetButton: Button
-    private lateinit var statusText: TextView
     private lateinit var capabilityText: TextView
     private lateinit var modeText: TextView
-    private lateinit var statsText: TextView
     private lateinit var errorText: TextView
 
     private val tcpClient = TcpClient(this)
@@ -45,6 +45,9 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
     private var videoConfig: VideoConfig? = null
     private var hasSurface = false
+    private var currentState = ConnectionState.DISCONNECTED
+    private var lastFps = 0
+    private var lastLatencyMs = 0
 
     // 统计
     private var frameCount = 0
@@ -62,16 +65,16 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
         setContentView(R.layout.activity_main)
 
         surfaceView = findViewById(R.id.surfaceView)
+        statusPill = findViewById(R.id.statusPill)
+        controlPanel = findViewById(R.id.controlPanel)
         hostInput = findViewById(R.id.hostInput)
         portInput = findViewById(R.id.portInput)
         connectButton = findViewById(R.id.connectButton)
         disconnectButton = findViewById(R.id.disconnectButton)
         playAssetButton = findViewById(R.id.playAssetButton)
         stopAssetButton = findViewById(R.id.stopAssetButton)
-        statusText = findViewById(R.id.statusText)
-        capabilityText = findViewById(R.id.capabilityText)
         modeText = findViewById(R.id.modeText)
-        statsText = findViewById(R.id.statsText)
+        capabilityText = findViewById(R.id.capabilityText)
         errorText = findViewById(R.id.errorText)
 
         coordinateMapper = CoordinateMapper(displayModeManager)
@@ -82,6 +85,9 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
         displayModeManager.onModeChanged = { runOnUiThread { updateDisplayModeUi() } }
         updateDisplayModeUi()
+        updateStatusPill()
+
+        statusPill.setOnClickListener { toggleControlPanel() }
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
@@ -129,6 +135,11 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
         assetPlayer.stop()
         tcpClient.disconnect()
         videoDecoder.release()
+    }
+
+    private fun toggleControlPanel() {
+        val visible = controlPanel.visibility == View.VISIBLE
+        controlPanel.visibility = if (visible) View.GONE else View.VISIBLE
     }
 
     private fun onPlayAssetClicked() {
@@ -187,30 +198,35 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
     //region TcpClientListener
 
     override fun onConnectionStateChanged(state: ConnectionState) {
+        currentState = state
         runOnUiThread {
+            updateConnectionButtons(state)
+            updateStatusPill()
             when (state) {
                 ConnectionState.DISCONNECTED -> {
-                    statusText.text = getString(R.string.status_disconnected)
-                    connectButton.visibility = View.VISIBLE
-                    disconnectButton.visibility = View.GONE
-                    statsText.visibility = View.GONE
                     videoDecoder.release()
                     displayModeManager.reset()
                     updateDisplayModeUi()
                 }
-                ConnectionState.CONNECTING -> {
-                    statusText.text = getString(R.string.status_connecting)
-                    connectButton.visibility = View.GONE
-                    disconnectButton.visibility = View.VISIBLE
-                }
                 ConnectionState.CONNECTED -> {
-                    statusText.text = getString(R.string.status_connected)
-                    connectButton.visibility = View.GONE
-                    disconnectButton.visibility = View.VISIBLE
-                    statsText.visibility = View.VISIBLE
                     frameCount = 0
                     lastStatsTime = System.currentTimeMillis()
                 }
+                else -> {}
+            }
+        }
+    }
+
+    private fun updateConnectionButtons(state: ConnectionState) {
+        when (state) {
+            ConnectionState.DISCONNECTED -> {
+                connectButton.visibility = View.VISIBLE
+                disconnectButton.visibility = View.GONE
+            }
+            ConnectionState.CONNECTING,
+            ConnectionState.CONNECTED -> {
+                connectButton.visibility = View.GONE
+                disconnectButton.visibility = View.VISIBLE
             }
         }
     }
@@ -261,11 +277,10 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
     override fun onAssetStarted(assetName: String, totalFrameCount: Int) {
         runOnUiThread {
-            statusText.text = "播放 fixture: $assetName ($totalFrameCount 帧)"
-            statsText.visibility = View.VISIBLE
             updateAssetButtons(true)
             this@MainActivity.frameCount = 0
             lastStatsTime = System.currentTimeMillis()
+            updateStatusPill()
         }
     }
 
@@ -276,8 +291,8 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
 
     override fun onAssetFinished(assetName: String, totalFrames: Int) {
         runOnUiThread {
-            statusText.text = "fixture 播放完成: $totalFrames 帧"
             updateAssetButtons(false)
+            updateStatusPill()
         }
     }
 
@@ -335,21 +350,50 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
             }
         }
         modeText.text = text
-        modeText.visibility = View.VISIBLE
+        updateStatusPill()
     }
 
     private fun updateStats() {
         val now = System.currentTimeMillis()
         val elapsed = now - lastStatsTime
-        if (elapsed <= 0) return
-        val fps = (frameCount * 1000 / elapsed).toInt()
-        val latencyMs = if (lastFrameTime > 0) now - lastFrameTime else 0
-        statsText.text = "FPS: $fps | last: ${latencyMs}ms | queued: ${videoDecoder.queueSize()}"
+        if (elapsed > 0) {
+            lastFps = (frameCount * 1000 / elapsed).toInt()
+        }
+        lastLatencyMs = if (lastFrameTime > 0) (now - lastFrameTime).toInt() else 0
         frameCount = 0
         lastStatsTime = now
+        updateStatusPill()
+    }
+
+    private fun updateStatusPill() {
+        val (color, label) = when (currentState) {
+            ConnectionState.DISCONNECTED -> Pair(0xFFFF5252.toInt(), getString(R.string.status_disconnected_short))
+            ConnectionState.CONNECTING -> Pair(0xFFFFD600.toInt(), getString(R.string.status_connecting_short))
+            ConnectionState.CONNECTED -> {
+                val modeLabel = when (displayModeManager.currentMode) {
+                    DisplayMode.MIRROR -> getString(R.string.mode_mirror_short)
+                    DisplayMode.EXTENDED -> getString(R.string.mode_extended_short, displayModeManager.targetDisplayId)
+                }
+                Pair(0xFF00E676.toInt(), modeLabel)
+            }
+        }
+
+        val stats = when {
+            currentState == ConnectionState.CONNECTED && lastFps > 0 -> {
+                val latencyPart = if (lastLatencyMs > 0) " | ${lastLatencyMs}ms" else ""
+                "${lastFps}fps${latencyPart}"
+            }
+            else -> ""
+        }
+
+        val text = if (stats.isEmpty()) label else "$label · $stats"
+        statusPill.text = text
+        statusPill.setTextColor(color)
     }
 
     private fun showError(message: String) {
+        // 展开面板以便看到错误
+        controlPanel.visibility = View.VISIBLE
         errorText.text = message
         errorText.visibility = View.VISIBLE
     }

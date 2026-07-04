@@ -96,7 +96,7 @@ final class Encoder {
         let duration = CMSampleBufferGetDuration(sampleBuffer)
         let sequence = nextSequence()
         let startTimeNs = DispatchTime.now().uptimeNanoseconds
-        let context = FrameContext(sequence: sequence, startTimeNs: startTimeNs, timestampNs: UInt64(pts.value))
+        let context = FrameContext(sequence: sequence, startTimeNs: startTimeNs, timestampNs: startTimeNs)
 
         let status = VTCompressionSessionEncodeFrame(
             session,
