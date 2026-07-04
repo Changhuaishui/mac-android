@@ -51,4 +51,17 @@ echo "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 echo "Signing ${APP_NAME}.app..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
+# 同时输出到 dist/，保持历史约定路径
+echo "Copying to dist/${APP_NAME}.app..."
+mkdir -p "dist"
+rm -rf "dist/${APP_NAME}.app" "dist/${APP_NAME}.zip"
+cp -R "$APP_BUNDLE" "dist/${APP_NAME}.app"
+
+echo "Creating dist/${APP_NAME}.zip..."
+cd "dist"
+zip -rq "${APP_NAME}.zip" "${APP_NAME}.app"
+cd "$SCRIPT_DIR"
+
 echo "Done: ${APP_BUNDLE}"
+echo "Done: dist/${APP_NAME}.app"
+echo "Done: dist/${APP_NAME}.zip"

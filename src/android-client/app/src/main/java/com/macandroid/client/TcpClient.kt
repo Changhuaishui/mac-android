@@ -1,6 +1,8 @@
 package com.macandroid.client
 
 import android.util.Log
+import com.macandroid.client.input.InputEvent
+import com.macandroid.client.input.InputEventSender
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -8,6 +10,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "MacTcpClient"
 private const val CONNECT_TIMEOUT_MS = 5000
@@ -26,12 +29,13 @@ enum class ConnectionState {
     CONNECTED
 }
 
-class TcpClient(private val listener: TcpClientListener) {
+class TcpClient(private val listener: TcpClientListener) : InputEventSender {
 
     private val running = AtomicBoolean(false)
     private var socket: Socket? = null
     private var readerThread: Thread? = null
     private val parser = MessageParser()
+    private val inputSequence = AtomicLong(0)
 
     @Volatile
     private var currentHost: String = ""
@@ -89,6 +93,23 @@ class TcpClient(private val listener: TcpClientListener) {
             }
         } catch (e: IOException) {
             Log.w(TAG, "send error failed", e)
+        }
+    }
+
+    override fun sendInputEvent(event: InputEvent) {
+        val s = socket ?: return
+        try {
+            val payload = event.toJson().toString().toByteArray(Charsets.UTF_8)
+            val seq = inputSequence.incrementAndGet()
+            val header = buildHeader(Protocol.TYPE_INPUT_EVENT, seq, System.nanoTime(), 0, payload.size)
+            val out = s.getOutputStream()
+            synchronized(out) {
+                out.write(header)
+                out.write(payload)
+                out.flush()
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "send input event failed", e)
         }
     }
 

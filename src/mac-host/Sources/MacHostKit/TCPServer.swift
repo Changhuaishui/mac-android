@@ -12,6 +12,12 @@ protocol TCPServerDelegate: AnyObject {
     func serverDidAcceptConnection(_ server: TCPServer)
     /// 收到 Android 发来的 HELLO payload。Mac Host 应解析并决定输出档位。
     func serverDidReceiveHello(_ server: TCPServer, data: Data)
+    /// 收到 PING。Mac Host 可选择原样回复或仅更新连接状态。
+    func serverDidReceivePing(_ server: TCPServer, data: Data)
+    /// 收到 INPUT_EVENT payload。Mac Host 应解析并注入。
+    func server(_ server: TCPServer, didReceiveInputEvent data: Data)
+    /// 收到对端 ERROR payload。Mac Host 应记录诊断日志。
+    func server(_ server: TCPServer, didReceiveError data: Data)
     /// 连接丢失或发生错误。
     func serverDidLoseConnection(_ server: TCPServer, error: Error?)
 }
@@ -191,11 +197,6 @@ final class TCPServer {
 
     private func processReadBuffer() {
         while true {
-            if helloReceived {
-                // M1 在 HELLO 之后忽略后续入站数据，清空缓存避免无限增长。
-                readBuffer.removeAll()
-                return
-            }
             guard readBuffer.count >= ProtocolHeader.size else { return }
             let headerData = readBuffer.prefix(ProtocolHeader.size)
             guard let header = ProtocolHeader(data: Data(headerData)) else {
@@ -218,13 +219,25 @@ final class TCPServer {
             }
             let payload = readBuffer.subdata(in: ProtocolHeader.size..<ProtocolHeader.size + payloadLen)
             readBuffer.removeFirst(ProtocolHeader.size + payloadLen)
-            if header.type == .hello {
+
+            switch header.type {
+            case .hello:
                 let jsonPreview = String(data: payload.prefix(2048), encoding: .utf8) ?? "<non-utf8>"
                 tcpServerLog("HELLO payload (truncated 2KB): \(jsonPreview)")
                 helloReceived = true
                 delegate?.serverDidReceiveHello(self, data: payload)
-            } else {
-                tcpServerLog("ignoring non-HELLO message type=\(header.type)")
+            case .inputEvent:
+                delegate?.server(self, didReceiveInputEvent: payload)
+            case .ping:
+                tcpServerLog("PING received (payload=\(payload.count) bytes)")
+                delegate?.serverDidReceivePing(self, data: payload)
+            case .error:
+                let preview = String(data: payload.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+                tcpServerLog("ERROR received: \(preview)")
+                delegate?.server(self, didReceiveError: payload)
+            case .videoConfig, .videoFrame:
+                // Mac Host 是发送端，不应收到这些类型；记录后忽略，保持连接。
+                tcpServerLog("unexpected message type=\(header.type), ignoring")
             }
         }
     }

@@ -7,6 +7,7 @@ enum MessageType: UInt16 {
     case videoFrame   = 2
     case ping         = 3
     case error        = 4
+    case inputEvent   = 5
 }
 
 

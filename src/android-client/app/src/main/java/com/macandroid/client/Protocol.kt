@@ -1,5 +1,7 @@
 package com.macandroid.client
 
+import com.macandroid.client.display.DisplayBounds
+import com.macandroid.client.display.DisplayMode
 import org.json.JSONObject
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -24,6 +26,11 @@ import java.nio.ByteOrder
  *   VIDEO_FRAME    = 2
  *   PING           = 3
  *   ERROR          = 4
+ *   INPUT_EVENT    = 5
+ *
+ * Display modes (VIDEO_CONFIG.display_mode):
+ *   MIRROR   = "mirror"
+ *   EXTENDED = "extended"
  *
  * Flags (VIDEO_FRAME):
  *   KEYFRAME = 0x01
@@ -41,6 +48,16 @@ object Protocol {
     const val TYPE_VIDEO_FRAME = 2
     const val TYPE_PING = 3
     const val TYPE_ERROR = 4
+    const val TYPE_INPUT_EVENT = 5
+
+    const val DISPLAY_MODE_MIRROR = "mirror"
+    const val DISPLAY_MODE_EXTENDED = "extended"
+
+    /**
+     * 未收到 VIDEO_CONFIG 或 Mac Host 未声明时的默认目标显示器 ID。
+     * v0 约定：0 表示主屏/未指定，扩展屏从 1 开始编号。
+     */
+    const val DEFAULT_TARGET_DISPLAY_ID = 0
 
     const val FLAG_KEYFRAME = 0x01
     const val FLAG_CONFIG = 0x02
@@ -51,6 +68,7 @@ object Protocol {
         TYPE_VIDEO_FRAME -> "VIDEO_FRAME"
         TYPE_PING -> "PING"
         TYPE_ERROR -> "ERROR"
+        TYPE_INPUT_EVENT -> "INPUT_EVENT"
         else -> "UNKNOWN($type)"
     }
 }
@@ -99,13 +117,21 @@ data class Message(
  *
  * v0 协议规定 `stream_format` 为 "annex_b"；为兼容旧字段也读取 `format`，
  * 内部统一转换为协议值 "annex_b"。M1 固定 Annex B byte stream。
+ *
+ * M3 扩展字段：
+ * - `display_mode`: "mirror" | "extended"，可选，默认 mirror。
+ * - `target_display_id`: 目标显示器标识，可选，默认 0。
+ * - `target_display_bounds`: 目标显示器在 Mac 全局坐标系中的边界，可选。
  */
 data class VideoConfig(
     val width: Int,
     val height: Int,
     val fps: Int,
     val codec: String,
-    val streamFormat: String
+    val streamFormat: String,
+    val displayMode: String? = null,
+    val targetDisplayId: Int = Protocol.DEFAULT_TARGET_DISPLAY_ID,
+    val targetDisplayBounds: DisplayBounds? = null
 ) {
     companion object {
         fun fromPayload(payload: ByteArray): VideoConfig {
@@ -114,12 +140,24 @@ data class VideoConfig(
                 "stream_format",
                 json.optString("format", "annex_b")
             )
+            val width = json.optInt("width", 1280)
+            val height = json.optInt("height", 800)
             return VideoConfig(
-                width = json.optInt("width", 1280),
-                height = json.optInt("height", 800),
+                width = width,
+                height = height,
                 fps = json.optInt("fps", 30),
                 codec = json.optString("codec", "h264"),
-                streamFormat = normalizeStreamFormat(rawFormat)
+                streamFormat = normalizeStreamFormat(rawFormat),
+                displayMode = json.optString("display_mode", null),
+                targetDisplayId = json.optInt("target_display_id", Protocol.DEFAULT_TARGET_DISPLAY_ID),
+                targetDisplayBounds = json.optJSONObject("target_display_bounds")?.let {
+                    DisplayBounds(
+                        x = it.optInt("x", 0),
+                        y = it.optInt("y", 0),
+                        width = it.optInt("width", width),
+                        height = it.optInt("height", height)
+                    )
+                }
             )
         }
 
@@ -128,6 +166,12 @@ data class VideoConfig(
             else -> "annex_b"
         }
     }
+
+    /**
+     * 将字符串 display_mode 转为 DisplayMode 枚举。
+     * 未声明或无法识别时默认返回 MIRROR，保证与旧 Mac Host 兼容。
+     */
+    fun displayModeEnum(): DisplayMode = DisplayMode.fromString(displayMode)
 }
 
 /**

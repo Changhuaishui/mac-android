@@ -13,4 +13,6 @@
     <string name="default_host">127.0.0.1</string>
     <string name="default_port">19421</string>
     <string name="capability_loading">正在读取显示能力…</string>
+    <string name="mode_mirror">镜像模式</string>
+    <string name="mode_extended">扩展屏模式 | 显示器 #%1$d | %2$s @ %3$dfps</string>
 </resources>

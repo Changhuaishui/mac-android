@@ -11,6 +11,11 @@ import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.macandroid.client.display.DisplayMode
+import com.macandroid.client.display.DisplayModeManager
+import com.macandroid.client.input.CoordinateMapper
+import com.macandroid.client.input.KeyboardHandler
+import com.macandroid.client.input.TouchHandler
 private const val TAG = "MacMainActivity"
 
 class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListener, AssetPlayerListener {
@@ -24,12 +29,17 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
     private lateinit var stopAssetButton: Button
     private lateinit var statusText: TextView
     private lateinit var capabilityText: TextView
+    private lateinit var modeText: TextView
     private lateinit var statsText: TextView
     private lateinit var errorText: TextView
 
     private val tcpClient = TcpClient(this)
     private val videoDecoder = VideoDecoder(this)
+    private val displayModeManager = DisplayModeManager()
+    private lateinit var coordinateMapper: CoordinateMapper
     private lateinit var assetPlayer: AssetPlayer
+    private lateinit var touchHandler: TouchHandler
+    private lateinit var keyboardHandler: KeyboardHandler
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -60,15 +70,29 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
         stopAssetButton = findViewById(R.id.stopAssetButton)
         statusText = findViewById(R.id.statusText)
         capabilityText = findViewById(R.id.capabilityText)
+        modeText = findViewById(R.id.modeText)
         statsText = findViewById(R.id.statsText)
         errorText = findViewById(R.id.errorText)
 
+        coordinateMapper = CoordinateMapper(displayModeManager)
         assetPlayer = AssetPlayer(assets, videoDecoder, this)
+
+        touchHandler = TouchHandler(tcpClient, coordinateMapper, surfaceView)
+        keyboardHandler = KeyboardHandler(tcpClient, coordinateMapper)
+
+        displayModeManager.onModeChanged = { runOnUiThread { updateDisplayModeUi() } }
+        updateDisplayModeUi()
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 Log.i(TAG, "Surface created")
                 hasSurface = true
+
+                surfaceView.setOnTouchListener(touchHandler)
+                surfaceView.isFocusableInTouchMode = true
+                surfaceView.requestFocus()
+                surfaceView.setOnKeyListener(keyboardHandler)
+
                 readDisplayCapabilities()
                 videoConfig?.let { cfg ->
                     videoDecoder.configure(cfg.width, cfg.height, cfg.fps, holder.surface)
@@ -171,6 +195,8 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
                     disconnectButton.visibility = View.GONE
                     statsText.visibility = View.GONE
                     videoDecoder.release()
+                    displayModeManager.reset()
+                    updateDisplayModeUi()
                 }
                 ConnectionState.CONNECTING -> {
                     statusText.text = getString(R.string.status_connecting)
@@ -194,7 +220,8 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
             Protocol.TYPE_VIDEO_CONFIG -> {
                 val cfg = VideoConfig.fromPayload(message.payload)
                 videoConfig = cfg
-                Log.i(TAG, "Received video config: ${cfg.width}x${cfg.height} ${cfg.fps}fps ${cfg.streamFormat}")
+                displayModeManager.updateFromVideoConfig(cfg)
+                Log.i(TAG, "Received video config: ${cfg.width}x${cfg.height} ${cfg.fps}fps ${cfg.streamFormat} mode=${cfg.displayMode}")
                 runOnUiThread {
                     if (hasSurface) {
                         videoDecoder.configure(cfg.width, cfg.height, cfg.fps, surfaceView.holder.surface)
@@ -291,6 +318,24 @@ class MainActivity : AppCompatActivity(), TcpClientListener, VideoDecoderListene
         runOnUiThread {
             capabilityText.text = capabilities.summaryText()
         }
+    }
+
+    private fun updateDisplayModeUi() {
+        val mode = displayModeManager.currentMode
+        val text = when (mode) {
+            DisplayMode.MIRROR -> getString(R.string.mode_mirror)
+            DisplayMode.EXTENDED -> {
+                val id = displayModeManager.targetDisplayId
+                val bounds = displayModeManager.targetDisplayBounds
+                val fps = displayModeManager.targetFps
+                val resolution = bounds?.let { "${it.width}x${it.height}" }
+                    ?: videoConfig?.let { "${it.width}x${it.height}" }
+                    ?: "?"
+                getString(R.string.mode_extended, id, resolution, fps)
+            }
+        }
+        modeText.text = text
+        modeText.visibility = View.VISIBLE
     }
 
     private fun updateStats() {

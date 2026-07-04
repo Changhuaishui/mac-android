@@ -12,6 +12,16 @@ public struct Configuration {
     /// 输出档位。nil 或 .custom 表示使用上面的显式 width/height/fps/bitrate。
     public var profile: Profile = .custom
     public var helloFixturePath: String?
+    /// 本地事件注入测试文件路径；设置时不启动 TCP 和采集。
+    public var injectTestPath: String?
+    /// 跳过输入注入前的 Accessibility 权限检查（仅调试用）。
+    public var skipInputPermissionCheck: Bool = false
+    /// 虚拟显示器 POC 探针模式；设置时不启动 TCP 和采集。
+    public var virtualDisplayProbe: Bool = false
+    /// 虚拟显示器 POC 采集帧输出路径。
+    public var virtualDisplayProbeOutputPath: String?
+    /// M3.2：使用虚拟显示器作为采集源。false 则回退到 M1 镜像主屏。
+    public var useVirtualDisplay: Bool = true
 
     public init() {}
 }
@@ -49,11 +59,15 @@ public final class MacHost {
     private var server: TCPServer!
     private var captureSession: CaptureSession!
     private var encoder: Encoder!
+    private var inputInjector: InputInjector!
+    private var coordinateMapper: CoordinateMapper!
+    private var virtualDisplay: CGVirtualDisplayBackend?
     private var protocolSequence: UInt64 = 0
     private var isRunning = false
     private var latestParameterSets: H264ParameterSets?
     private var dumpFileHandle: FileHandle?
     private var helloTimeoutWorkItem: DispatchWorkItem?
+    private var accessibilityChecked = false
 
     public init(configuration: Configuration) {
         self.config = configuration
@@ -65,6 +79,28 @@ public final class MacHost {
 
     public func start() async -> Bool {
         logger.logState("当前 profile: \(config.profile)")
+
+        if let injectPath = config.injectTestPath {
+            return await runInjectTest(path: injectPath)
+        }
+
+        if config.virtualDisplayProbe {
+            return await runVirtualDisplayProbe()
+        }
+
+        if !config.skipInputPermissionCheck {
+            accessibilityChecked = AccessibilityPermission.check(prompt: true)
+            if !accessibilityChecked {
+                logger.logError(AccessibilityPermission.guidance)
+            } else {
+                logger.logState("辅助功能权限已授予")
+            }
+        } else {
+            logger.logState("跳过辅助功能权限检查（调试模式）")
+        }
+
+        setupInputInjector()
+
         if let dumpPath = config.dumpPath {
             let caps = loadHelloFixtureIfNeeded()
             capabilities = caps
@@ -90,6 +126,93 @@ public final class MacHost {
         return true
     }
 
+    private func runInjectTest(path: String) async -> Bool {
+        if !config.skipInputPermissionCheck && !AccessibilityPermission.check(prompt: true) {
+            logger.logError(AccessibilityPermission.guidance)
+            return false
+        }
+        setupInputInjector()
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            let events = try JSONDecoder().decode([InjectTestEvent].self, from: data)
+            logger.logState("注入测试模式：读取 \(events.count) 条事件")
+            for event in events {
+                if event.delayMs > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(event.delayMs) * 1_000_000)
+                }
+                let inputEvent = event.toInputEvent()
+                if let error = inputInjector.inject(inputEvent) {
+                    logger.logError("注入失败: \(error.localizedDescription)")
+                }
+            }
+            logger.logState("注入测试完成")
+        } catch {
+            logger.logError("读取注入测试文件失败: \(error.localizedDescription)")
+            return false
+        }
+
+        statusDelegate?.hostDidStop(self)
+        return true
+    }
+
+    private func runVirtualDisplayProbe() async -> Bool {
+        let backend = VirtualDisplayProvider.preferredBackend()
+        logger.logState("虚拟显示器 POC：preferred backend = \(backend)")
+
+        for (name, available) in VirtualDisplayProvider.availabilityReport() {
+            logger.logState("后端可用性: \(name) = \(available ? "可用" : "不可用")")
+        }
+
+        guard backend != .none else {
+            logger.logError("当前系统没有可用虚拟显示器后端")
+            logger.logState(DriverKitProbe.report())
+            statusDelegate?.hostDidStop(self)
+            return false
+        }
+
+        let vdisplayConfig = VirtualDisplayConfiguration(
+            width: config.width,
+            height: config.height,
+            refreshRate: config.fps,
+            name: "MacAndroid Probe"
+        )
+        guard let vdisplay = VirtualDisplayProvider.create(configuration: vdisplayConfig, logger: { [weak self] message, isError in
+            if isError {
+                self?.logger.logError(message)
+            } else {
+                self?.logger.logState(message)
+            }
+        }) else {
+            logger.logError("无法创建虚拟显示器实例")
+            statusDelegate?.hostDidStop(self)
+            return false
+        }
+
+        let result = await vdisplay.runProbe(captureOutputPath: config.virtualDisplayProbeOutputPath)
+
+        for message in result.messages {
+            logger.logState(message)
+        }
+
+        if result.success {
+            logger.logState("POC 成功: displayID=\(result.displayID.map { String($0) } ?? "nil"), 系统识别=\(result.systemDetected), 采集=\(result.captureSucceeded), 路径=\(result.capturePath ?? "nil")")
+        } else {
+            logger.logError("POC 失败: \(result.error?.description ?? "未知错误")")
+            logger.logState(DriverKitProbe.report())
+        }
+
+        vdisplay.stop()
+        statusDelegate?.hostDidStop(self)
+        return result.success
+    }
+
+    private func setupInputInjector(displayID: CGDirectDisplayID? = nil) {
+        coordinateMapper = CoordinateMapper(displayID: displayID)
+        inputInjector = InputInjector(mapper: coordinateMapper, logger: logger)
+        logger.logState("输入注入器已初始化，目标显示器: \(coordinateMapper.targetDisplayID), bounds: \(coordinateMapper.displayBounds)")
+    }
+
     public func stop() {
         cancelHelloTimeout()
         if config.dumpPath != nil {
@@ -99,6 +222,7 @@ public final class MacHost {
             stopStreaming()
             logger.logState("服务已停止")
         }
+        inputInjector?.reset()
         statusDelegate?.hostDidStop(self)
     }
 
@@ -157,6 +281,64 @@ public final class MacHost {
         }
     }
 
+    // MARK: - Virtual display
+
+    /// 若配置启用虚拟显示器，则创建并返回其 displayID；否则返回 nil（使用主屏）。
+    private func setupVirtualDisplay(output: StreamConfiguration) -> CGDirectDisplayID? {
+        guard config.useVirtualDisplay else {
+            logger.logState("使用主屏作为采集源（--mirror 模式）")
+            return nil
+        }
+
+        let vdisplayConfig = VirtualDisplayConfiguration(
+            width: output.width,
+            height: output.height,
+            refreshRate: output.fps,
+            name: "MacAndroid Virtual Display"
+        )
+        let backend = CGVirtualDisplayBackend(configuration: vdisplayConfig) { [weak self] message, isError in
+            if isError {
+                self?.logger.logError(message)
+            } else {
+                self?.logger.logState(message)
+            }
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var resultDisplayID: CGDirectDisplayID?
+        var resultError: Error?
+
+        Task.detached {
+            do {
+                try await backend.start()
+                resultDisplayID = backend.displayID
+            } catch {
+                resultError = error
+            }
+            semaphore.signal()
+        }
+
+        let waitResult = semaphore.wait(timeout: .now() + 8)
+        if waitResult == .timedOut {
+            logger.logError("虚拟显示器注册超时，回退到主屏采集")
+            return nil
+        }
+        if let error = resultError {
+            logger.logError("创建虚拟显示器失败: \(error.localizedDescription)，回退到主屏采集")
+            return nil
+        }
+
+        virtualDisplay = backend
+        setupInputInjector(displayID: resultDisplayID)
+        logger.logState("虚拟显示器已创建并作为采集源，displayID=\(resultDisplayID.map { String($0) } ?? "nil")")
+        return resultDisplayID
+    }
+
+    private func teardownVirtualDisplay() {
+        virtualDisplay?.stop()
+        virtualDisplay = nil
+    }
+
     // MARK: - Streaming
 
     private func startStreaming(output: StreamConfiguration) {
@@ -170,6 +352,8 @@ public final class MacHost {
             logger.logState("降级原因: \(reason)")
         }
 
+        let targetDisplayID = setupVirtualDisplay(output: output)
+
         captureSession = CaptureSession(width: output.width, height: output.height, fps: output.fps)
         encoder = Encoder(width: Int32(output.width), height: Int32(output.height), fps: output.fps, bitrate: output.bitrate)
         encoder.delegate = self
@@ -178,6 +362,7 @@ public final class MacHost {
             logger.logError("启动编码器失败: \(error.localizedDescription)")
             sendError(errorText)
             isRunning = false
+            teardownVirtualDisplay()
             stopStreaming()
             statusDelegate?.hostDidStop(self)
             return
@@ -187,7 +372,7 @@ public final class MacHost {
 
         Task {
             do {
-                try await captureSession.start()
+                try await captureSession.start(targetDisplayID: targetDisplayID)
                 logger.logState("屏幕采集已启动")
             } catch {
                 let errorText = "capture_start_failed: \(error.localizedDescription)"
@@ -219,12 +404,15 @@ public final class MacHost {
         }
         dumpFileHandle = handle
 
+        let targetDisplayID = setupVirtualDisplay(output: output)
+
         captureSession = CaptureSession(width: output.width, height: output.height, fps: output.fps)
         encoder = Encoder(width: Int32(output.width), height: Int32(output.height), fps: output.fps, bitrate: output.bitrate)
         encoder.delegate = self
         if let error = encoder.start() {
             logger.logError("启动编码器失败: \(error.localizedDescription)")
             isRunning = false
+            teardownVirtualDisplay()
             return false
         }
 
@@ -232,7 +420,7 @@ public final class MacHost {
 
         Task {
             do {
-                try await captureSession.start()
+                try await captureSession.start(targetDisplayID: targetDisplayID)
                 logger.logState("屏幕采集已启动")
             } catch {
                 logger.logError("启动屏幕采集失败: \(error.localizedDescription)")
@@ -261,6 +449,7 @@ public final class MacHost {
         }
         dumpFileHandle?.closeFile()
         dumpFileHandle = nil
+        teardownVirtualDisplay()
     }
 
     private func stopStreaming() {
@@ -271,6 +460,7 @@ public final class MacHost {
         encoder?.stop { [weak self] in
             self?.logger.logState("编码器已停止")
         }
+        teardownVirtualDisplay()
     }
 
     // MARK: - HELLO timeout
@@ -362,6 +552,92 @@ private struct HelloMessage: Codable {
     }
 }
 
+// MARK: - Inject test helper
+
+private struct InjectTestEvent: Codable {
+    let eventType: String
+    let pointerId: Int?
+    let normalizedX: Double?
+    let normalizedY: Double?
+    let pressure: Double?
+    let keyCode: Int?
+    let modifiers: [String]?
+    let wheelDeltaX: Double?
+    let wheelDeltaY: Double?
+    let delayMs: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "event_type"
+        case pointerId = "pointer_id"
+        case normalizedX = "normalized_x"
+        case normalizedY = "normalized_y"
+        case pressure
+        case keyCode = "key_code"
+        case modifiers
+        case wheelDeltaX = "wheel_delta_x"
+        case wheelDeltaY = "wheel_delta_y"
+        case delayMs = "delay_ms"
+    }
+
+    /// 兼容 Android Client 当前字段名。
+    enum AndroidCodingKeys: String, CodingKey {
+        case eventType = "type"
+        case pointerId = "pointer_id"
+        case normalizedX = "x"
+        case normalizedY = "y"
+        case pressure
+        case keyCode = "key_code"
+        case modifiers = "meta_state"
+        case wheelDeltaX = "delta_x"
+        case wheelDeltaY = "delta_y"
+        case delayMs = "delay_ms"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try? decoder.container(keyedBy: CodingKeys.self)
+        if let container = container,
+           let eventType = try? container.decode(String.self, forKey: .eventType) {
+            self.eventType = eventType
+            self.pointerId = try? container.decode(Int.self, forKey: .pointerId)
+            self.normalizedX = try? container.decode(Double.self, forKey: .normalizedX)
+            self.normalizedY = try? container.decode(Double.self, forKey: .normalizedY)
+            self.pressure = try? container.decode(Double.self, forKey: .pressure)
+            self.keyCode = try? container.decode(Int.self, forKey: .keyCode)
+            self.modifiers = try? container.decode([String].self, forKey: .modifiers)
+            self.wheelDeltaX = try? container.decode(Double.self, forKey: .wheelDeltaX)
+            self.wheelDeltaY = try? container.decode(Double.self, forKey: .wheelDeltaY)
+            self.delayMs = (try? container.decode(UInt64.self, forKey: .delayMs)) ?? 0
+            return
+        }
+
+        let android = try decoder.container(keyedBy: AndroidCodingKeys.self)
+        self.eventType = try android.decode(String.self, forKey: .eventType)
+        self.pointerId = try? android.decode(Int.self, forKey: .pointerId)
+        self.normalizedX = try? android.decode(Double.self, forKey: .normalizedX)
+        self.normalizedY = try? android.decode(Double.self, forKey: .normalizedY)
+        self.pressure = try? android.decode(Double.self, forKey: .pressure)
+        self.keyCode = try? android.decode(Int.self, forKey: .keyCode)
+        self.modifiers = try? android.decode([String].self, forKey: .modifiers)
+        self.wheelDeltaX = try? android.decode(Double.self, forKey: .wheelDeltaX)
+        self.wheelDeltaY = try? android.decode(Double.self, forKey: .wheelDeltaY)
+        self.delayMs = (try? android.decode(UInt64.self, forKey: .delayMs)) ?? 0
+    }
+
+    func toInputEvent() -> InputEvent {
+        InputEvent(
+            eventType: InputEventType(rawValue: eventType) ?? .touchMove,
+            pointerId: pointerId,
+            normalizedX: normalizedX ?? 0.0,
+            normalizedY: normalizedY ?? 0.0,
+            pressure: pressure,
+            keyCode: keyCode,
+            modifiers: modifiers,
+            wheelDeltaX: wheelDeltaX,
+            wheelDeltaY: wheelDeltaY
+        )
+    }
+}
+
 // MARK: - TCPServerDelegate
 
 extension MacHost: TCPServerDelegate {
@@ -389,6 +665,29 @@ extension MacHost: TCPServerDelegate {
         statusDelegate?.hostDidAcceptConnection(self)
     }
 
+    func serverDidReceivePing(_ server: TCPServer, data: Data) {
+        // M2 最小闭环：收到 PING 后记录日志，不强制回复，避免与视频发送争抢。
+        logger.logState("收到 PING (payload=\(data.count) bytes)")
+    }
+
+    func server(_ server: TCPServer, didReceiveInputEvent data: Data) {
+        switch InputEventParser.parse(data) {
+        case .success(let event):
+            if let error = inputInjector.inject(event) {
+                logger.logError("输入注入失败: \(error.localizedDescription)")
+                sendError("input_inject_failed: \(error.localizedDescription)")
+            }
+        case .failure(let error):
+            logger.logError("解析 INPUT_EVENT 失败: \(error.localizedDescription)")
+            sendError("bad_input_event: \(error.localizedDescription)")
+        }
+    }
+
+    func server(_ server: TCPServer, didReceiveError data: Data) {
+        let preview = String(data: data.prefix(512), encoding: .utf8) ?? "<non-utf8>"
+        logger.logError("收到对端 ERROR: \(preview)")
+    }
+
     func serverDidLoseConnection(_ server: TCPServer, error: Error?) {
         cancelHelloTimeout()
         if let error = error {
@@ -396,6 +695,7 @@ extension MacHost: TCPServerDelegate {
         } else {
             logger.logState("TCP client 断开")
         }
+        inputInjector?.reset()
         stopStreaming()
         statusDelegate?.hostDidLoseConnection(self, error: error)
     }

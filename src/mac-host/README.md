@@ -36,14 +36,21 @@ cd src/mac-host
 ./package-app.sh
 ```
 
-打包产物会放到 **`src/mac-host/dist/`**：
+打包产物：
 
-- `dist/MacHostApp.app`：可直接双击打开的 App bundle。
-- `dist/MacHostApp.zip`：压缩包，方便拷贝或分享。
+- `./.build/MacHostApp.app`：本次构建的 App bundle。
+- `./dist/MacHostApp.app`：同步复制到 `dist/` 的 App bundle（历史约定路径）。
+- `./dist/MacHostApp.zip`：压缩包，方便拷贝或分享。
 
-你可以把 `MacHostApp.app` 拖到「应用程序」文件夹，然后双击打开。
+你可以把 `dist/MacHostApp.app` 拖到「应用程序」文件夹，然后双击打开。
+
+> **注意**：`dist/MacHostApp.app` 只有在运行 `./package-app.sh` 后才会更新。不要直接打开旧的 `dist/MacHostApp.app`，否则运行的是旧代码。
 
 首次运行若提示「无法打开」或「无法验证开发者」，请在 Finder 中按住 `Control` 键点按 App，选择「打开」。
+
+> **重要**：不要同时运行多个 Mac Host 进程，否则它们会争抢虚拟显示器。启动前检查 `ps aux | grep machost` 并杀掉旧进程。
+
+> **重要**：M3.2 起默认创建虚拟显示器。不要在「系统设置 → 显示器」中手动更改该虚拟显示器的分辨率或排列，否则可能退化成镜像模式。
 
 ## 1. 可视化窗口 App（推荐日常使用）
 
@@ -100,6 +107,12 @@ xxd -l 16 /tmp/sample-annexb.h264
 ./.build/debug/machost --width 1920 --height 1200 --fps 30 --bitrate 12000000 --port 19421
 ```
 
+默认使用 **虚拟显示器** 作为采集源（M3.2），Mac 主屏与 Android 显示不同内容。如需回退到 M1 镜像主屏：
+
+```bash
+./.build/debug/machost --mirror
+```
+
 Android 端连接端口请填 **19421**。
 
 TCP server 现在同时监听 **IPv4 `0.0.0.0:19421`** 与 **IPv6 `[::]:19421`**，因此支持：
@@ -128,6 +141,7 @@ nc -d <mac-ip> 19421 > /tmp/capture.h264
 | port | 19421 | TCP 监听端口；Android 端也需填 19421 |
 | dump-duration | 5 | dump 模式采集秒数 |
 | hello-fixture | 无 | 从 JSON 文件加载 Android HELLO 用于自测 |
+| useVirtualDisplay | true | M3.2 默认使用虚拟显示器；`--mirror` 设为 false |
 
 ## 协议 v0 行为
 
