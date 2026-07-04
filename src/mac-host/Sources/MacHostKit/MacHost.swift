@@ -64,6 +64,7 @@ public final class MacHost {
     }
 
     public func start() async -> Bool {
+        logger.logState("当前 profile: \(config.profile)")
         if let dumpPath = config.dumpPath {
             let caps = loadHelloFixtureIfNeeded()
             capabilities = caps
@@ -124,7 +125,8 @@ public final class MacHost {
             let data = try Data(contentsOf: URL(fileURLWithPath: path))
             let hello = try JSONDecoder().decode(HelloMessage.self, from: data)
             if let caps = hello.displayCapabilities {
-                logger.logState("从 fixture 加载 HELLO: current_mode=\(caps.currentMode.summary)")
+                let modeSummary = caps.currentMode?.summary ?? "null"
+                logger.logState("从 fixture 加载 HELLO: current_mode=\(modeSummary)")
                 return caps
             } else {
                 logger.logError("HELLO fixture 缺少 display_capabilities")
@@ -137,17 +139,20 @@ public final class MacHost {
     }
 
     private func parseHello(data: Data) -> DisplayCapabilities? {
+        let rawJSON = String(data: data.prefix(2048), encoding: .utf8) ?? "<non-utf8>"
         do {
             let hello = try JSONDecoder().decode(HelloMessage.self, from: data)
             if let caps = hello.displayCapabilities {
-                logger.logState("收到 Android HELLO: current_mode=\(caps.currentMode.summary)")
+                let modeSummary = caps.currentMode?.summary ?? "null"
+                logger.logState("收到 Android HELLO: 原始 JSON = \(rawJSON)")
+                logger.logState("收到 Android HELLO: current_mode=\(modeSummary)")
                 return caps
             } else {
-                logger.logError("Android HELLO 缺少 display_capabilities")
+                logger.logError("Android HELLO 缺少 display_capabilities, 原始 JSON = \(rawJSON)")
                 return nil
             }
         } catch {
-            logger.logError("解析 Android HELLO 失败: \(error.localizedDescription)")
+            logger.logError("解析 Android HELLO 失败: error = \(error.localizedDescription), 原始 JSON = \(rawJSON)")
             return nil
         }
     }
@@ -169,9 +174,11 @@ public final class MacHost {
         encoder = Encoder(width: Int32(output.width), height: Int32(output.height), fps: output.fps, bitrate: output.bitrate)
         encoder.delegate = self
         if let error = encoder.start() {
+            let errorText = "encoder_start_failed: \(error.localizedDescription)"
             logger.logError("启动编码器失败: \(error.localizedDescription)")
+            sendError(errorText)
             isRunning = false
-            server?.stop()
+            stopStreaming()
             statusDelegate?.hostDidStop(self)
             return
         }
@@ -183,7 +190,9 @@ public final class MacHost {
                 try await captureSession.start()
                 logger.logState("屏幕采集已启动")
             } catch {
+                let errorText = "capture_start_failed: \(error.localizedDescription)"
                 logger.logError("启动屏幕采集失败: \(error.localizedDescription)")
+                self.sendError(errorText)
                 self.stopStreaming()
                 self.statusDelegate?.hostDidStop(self)
             }
@@ -320,6 +329,21 @@ public final class MacHost {
         packet.append(data)
         server.send(packet)
         logger.logFrame(encodedBytes: data.count, encodeDurationMs: encodeDurationMs)
+    }
+
+    private func sendError(_ text: String) {
+        let payload = Data(text.utf8)
+        let header = ProtocolHeader(
+            type: .error,
+            sequence: nextProtocolSequence(),
+            timestampNs: 0,
+            flags: 0,
+            payloadLength: UInt32(payload.count)
+        )
+        var packet = header.encode()
+        packet.append(payload)
+        server.send(packet)
+        logger.logState("发送 ERROR 消息: \(text)")
     }
 
     private func nextProtocolSequence() -> UInt64 {

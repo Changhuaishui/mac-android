@@ -9,6 +9,7 @@ enum MessageType: UInt16 {
     case error        = 4
 }
 
+
 /// protocol v0 flags
 struct ProtocolFlags {
     static let keyframe: UInt32 = 0x00000001

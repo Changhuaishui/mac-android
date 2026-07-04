@@ -1,6 +1,7 @@
 import Foundation
 import ScreenCaptureKit
 import CoreMedia
+import CoreGraphics
 
 protocol CaptureSessionDelegate: AnyObject {
     func captureSession(_ session: CaptureSession, didOutput sampleBuffer: CMSampleBuffer)
@@ -26,7 +27,7 @@ final class CaptureSession: NSObject, SCStreamOutput {
         return try await withCheckedThrowingContinuation { continuation in
             SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, error in
                 if let error = error {
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: Self.mapError(error))
                 } else if let content = content {
                     continuation.resume(returning: content.displays)
                 } else {
@@ -63,6 +64,15 @@ final class CaptureSession: NSObject, SCStreamOutput {
         }
     }
 
+    private static func mapError(_ error: Error) -> Error {
+        let nsError = error as NSError
+        if nsError.domain == SCStreamErrorDomain,
+           nsError.code == SCStreamError.userDeclined.rawValue {
+            return CaptureError.screenRecordingPermissionDenied
+        }
+        return error
+    }
+
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .screen else { return }
         delegate?.captureSession(self, didOutput: sampleBuffer)
@@ -79,11 +89,14 @@ final class CaptureSession: NSObject, SCStreamOutput {
 
 enum CaptureError: LocalizedError {
     case noDisplayFound
+    case screenRecordingPermissionDenied
 
     var errorDescription: String? {
         switch self {
         case .noDisplayFound:
             return "未找到可采集的显示器"
+        case .screenRecordingPermissionDenied:
+            return "屏幕录制权限未授予，请在 系统设置 → 隐私与安全性 → 屏幕录制 中启用本应用"
         }
     }
 }

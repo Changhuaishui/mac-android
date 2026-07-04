@@ -102,19 +102,18 @@ xxd -l 16 /tmp/sample-annexb.h264
 
 Android 端连接端口请填 **19421**。
 
-**注意**：当前 TCP server 默认只监听 IPv6 通配地址 `*:19421`。本机自测请使用 IPv6 地址 `::1`：
+TCP server 现在同时监听 **IPv4 `0.0.0.0:19421`** 与 **IPv6 `[::]:19421`**，因此支持：
+
+- 本机 `127.0.0.1` 或 `::1` 自测。
+- `adb reverse tcp:19421 tcp:19421` 后真机连接 `127.0.0.1:19421`。
+- 同一局域网内真机直接连接 Mac 的 IPv4 地址（如 `10.78.160.132:19421`）。
 
 ```bash
-nc -d ::1 19421 > /tmp/capture.h264
-# 或用 Python
-python3 -c "
-import socket, time
-s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-s.connect(('::1', 19421))
-s.settimeout(6)
-open('/tmp/capture.h264','wb').write(s.recv(1024*1024))
-print('done')
-"
+# 本机 IPv4 自测
+nc -d 127.0.0.1 19421 > /tmp/capture.h264
+
+# 局域网 IPv4（将 <mac-ip> 替换为 Mac 实际局域网地址）
+nc -d <mac-ip> 19421 > /tmp/capture.h264
 ```
 
 ## 默认参数

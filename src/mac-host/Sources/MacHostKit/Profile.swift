@@ -23,7 +23,8 @@ public enum Profile: String, CaseIterable, CustomStringConvertible, Sendable {
 /// 解析 Android HELLO 中的显示能力。
 /// 字段定义以 `设计/protocol-v0.md` 为准。
 public struct DisplayCapabilities: Codable, Sendable {
-    public let currentMode: DisplayMode
+    /// current_mode 可能为 null（例如 Android API < 23 或 Surface 未就绪时）。
+    public let currentMode: DisplayMode?
     public let supportedModes: [DisplayMode]?
     public let windowBounds: Size?
     public let surfaceSize: Size?
@@ -187,19 +188,21 @@ public struct ProfileResolver {
             return make(width: 1920, height: 1200, fps: 60)
                 .withDegradation("未收到 Android HELLO/display_capabilities，detected-native-safe 降级到 hd60")
         }
-        let mode = caps.currentMode
-        let raw = mode.rawRefreshRate
-        let normalized = mode.normalizedFPS
+        let (width, height) = resolveTargetSize(caps: caps)
+        let raw = caps.currentMode?.rawRefreshRate
+        let normalized = caps.currentMode?.normalizedFPS ?? 60.0
         let selected = min(normalized, encoderRecommendedMaxFPS)
         var config = make(
-            width: mode.effectiveWidth,
-            height: mode.effectiveHeight,
+            width: width,
+            height: height,
             fps: selected,
             rawRefreshRate: raw,
-            normalizedFPS: normalized,
+            normalizedFPS: caps.currentMode?.normalizedFPS,
             selectedFPS: selected
         )
-        if mode.physicalWidth == nil || mode.physicalHeight == nil {
+        if caps.currentMode == nil {
+            config = config.withDegradation("Android HELLO 缺少 current_mode，已使用 window_bounds/surface_size 并降级到 60fps")
+        } else if caps.currentMode?.physicalWidth == nil || caps.currentMode?.physicalHeight == nil {
             config = config.withDegradation("legacy compatibility: 未上报 physical_width/physical_height，使用旧 fixture 字段 width/height")
         }
         if raw == nil {
@@ -215,25 +218,60 @@ public struct ProfileResolver {
             return make(width: 1920, height: 1200, fps: 60)
                 .withDegradation("未收到 Android HELLO/display_capabilities，detected-native 降级到 hd60")
         }
-        let mode = caps.currentMode
-        let raw = mode.rawRefreshRate
-        let normalized = mode.normalizedFPS
+        let (width, height) = resolveTargetSize(caps: caps)
+        let raw = caps.currentMode?.rawRefreshRate
+        let normalized = caps.currentMode?.normalizedFPS ?? 60.0
         let selected = normalized
         var config = make(
-            width: mode.effectiveWidth,
-            height: mode.effectiveHeight,
+            width: width,
+            height: height,
             fps: selected,
             rawRefreshRate: raw,
-            normalizedFPS: normalized,
+            normalizedFPS: caps.currentMode?.normalizedFPS,
             selectedFPS: selected
         )
-        if mode.physicalWidth == nil || mode.physicalHeight == nil {
+        if caps.currentMode == nil {
+            config = config.withDegradation("Android HELLO 缺少 current_mode，已使用 window_bounds/surface_size 并降级到 60fps")
+        } else if caps.currentMode?.physicalWidth == nil || caps.currentMode?.physicalHeight == nil {
             config = config.withDegradation("legacy compatibility: 未上报 physical_width/physical_height，使用旧 fixture 字段 width/height")
         }
         if selected > encoderRecommendedMaxFPS {
             config = config.withDegradation("Android 刷新率 raw=\(raw ?? 0)Hz normalized=\(Int(normalized))Hz 超过编码器推荐上限 \(Int(encoderRecommendedMaxFPS))Hz，允许运行但可能掉帧")
         }
         return config
+    }
+
+    /// 根据 orientation 与 window_bounds / surface_size 计算目标输出尺寸。
+    /// 优先使用窗口/Surface 尺寸（已反映 App 当前方向），fallback 到 current_mode.physical 并按方向交换。
+    private static func resolveTargetSize(caps: DisplayCapabilities) -> (width: Int, height: Int) {
+        let orientation = caps.orientation?.lowercased()
+        let isLandscape = orientation == "landscape"
+        let isPortrait = orientation == "portrait"
+
+        if let bounds = caps.windowBounds ?? caps.surfaceSize {
+            let w = bounds.width
+            let h = bounds.height
+            if isLandscape {
+                return (max(w, h), min(w, h))
+            } else if isPortrait {
+                return (min(w, h), max(w, h))
+            } else {
+                return (w, h)
+            }
+        }
+
+        guard let mode = caps.currentMode else {
+            return (1920, 1200)
+        }
+        let w = mode.effectiveWidth
+        let h = mode.effectiveHeight
+        if isLandscape {
+            return (max(w, h), min(w, h))
+        } else if isPortrait {
+            return (min(w, h), max(w, h))
+        } else {
+            return (w, h)
+        }
     }
 
     private static func make(

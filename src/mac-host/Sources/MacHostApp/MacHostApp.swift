@@ -169,8 +169,8 @@ final class MacHostViewModel: ObservableObject {
     @Published var logs: [String] = []
     private var host: MacHost?
     private let maxLogLines = 100
-    /// App 默认使用 balanced 档；如需切换可在后续版本加选择器。
-    private let appProfile: Profile = .balanced
+    /// App 默认使用 detected-native-safe 档；如需切换可在后续版本加选择器。
+    private let appProfile: Profile = .detectedNativeSafe
 
     init() {
         let config = Configuration()
